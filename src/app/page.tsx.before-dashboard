@@ -1,0 +1,552 @@
+"use client";
+
+import { useEffect, useState, type FormEvent } from "react";
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut,
+  type User,
+} from "firebase/auth";
+import { auth } from "@/lib/firebase";
+
+const ADMIN_EMAIL = "official@gonnaglobal.com";
+
+const emptyForm = {
+  title: "",
+  organization: "",
+  description: "",
+  posterUrl: "",
+  location: "",
+  eligibility: "",
+  responsibilities: "",
+  type: "Global Opportunities",
+  deadline: "",
+  mode: "Remote",
+  funding: "Free",
+  careerDomain: "AI & Technology",
+  deadlineType: "Open",
+  benefits: "",
+  applicationLink: "",
+  status: "active",
+};
+
+type Opportunity = {
+  id: string;
+  title?: string;
+  organization?: string;
+  description?: string;
+  posterUrl?: string;
+  location?: string;
+  eligibility?: string;
+  responsibilities?: string;
+  type?: string;
+  deadline?: string;
+  mode?: string;
+  funding?: string;
+  careerDomain?: string;
+  deadlineType?: string;
+  benefits?: string;
+  applicationLink?: string;
+  status?: string;
+  postedByType?: string;
+};
+
+const inputClass =
+  "w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-white outline-none focus:border-cyan-400";
+
+export default function Home() {
+  const [user, setUser] = useState<User | null>(null);
+  const [checking, setChecking] = useState(true);
+  const [email, setEmail] = useState(ADMIN_EMAIL);
+  const [password, setPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [message, setMessage] = useState("");
+  const [items, setItems] = useState<Opportunity[]>([]);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    return onAuthStateChanged(auth, (current) => {
+      if (current && current.email?.toLowerCase() !== ADMIN_EMAIL) {
+        signOut(auth);
+        setUser(null);
+        setLoginError("This account is not authorized as Super Admin.");
+      } else {
+        setUser(current);
+      }
+      setChecking(false);
+    });
+  }, []);
+
+  async function api(path: string, options: RequestInit = {}) {
+    if (!user) throw new Error("Please sign in again.");
+
+    const token = await user.getIdToken();
+    const response = await fetch(path, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...options.headers,
+      },
+    });
+
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Request failed");
+    return result;
+  }
+
+  async function loadItems() {
+    try {
+      const result = await api("/api/opportunities");
+      setItems(result.opportunities || []);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to load opportunities.");
+    }
+  }
+
+  useEffect(() => {
+    if (user) loadItems();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  async function handleLogin(event: FormEvent) {
+    event.preventDefault();
+    setLoginError("");
+
+    if (email.trim().toLowerCase() !== ADMIN_EMAIL) {
+      setLoginError("Only the authorized Super Admin account can sign in.");
+      return;
+    }
+
+    try {
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+    } catch {
+      setLoginError("Login failed. Check the account and password in Firebase Authentication.");
+    }
+  }
+
+  function editItem(item: Opportunity) {
+    setForm({
+      title: item.title ?? "",
+      organization: item.organization ?? "",
+      description: item.description ?? "",
+      posterUrl: item.posterUrl ?? "",
+      location: item.location ?? "",
+      eligibility: item.eligibility ?? "",
+      responsibilities: item.responsibilities ?? "",
+      type: item.type ?? "Global Opportunities",
+      deadline: item.deadline ?? "",
+      mode: item.mode ?? "Remote",
+      funding: item.funding ?? "Free",
+      careerDomain: item.careerDomain ?? "AI & Technology",
+      deadlineType: item.deadlineType ?? "Open",
+      benefits: item.benefits ?? "",
+      applicationLink: item.applicationLink ?? "",
+      status: item.status ?? "active",
+    });
+    setEditingId(item.id);
+    setShowForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function saveItem(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setMessage("");
+
+    try {
+      if (editingId) {
+        await api("/api/opportunities", {
+          method: "PATCH",
+          body: JSON.stringify({ id: editingId, ...form }),
+        });
+        setMessage("Opportunity updated successfully.");
+      } else {
+        await api("/api/opportunities", {
+          method: "POST",
+          body: JSON.stringify(form),
+        });
+        setMessage(
+          form.status === "draft"
+            ? "Draft saved successfully."
+            : "Opportunity published successfully."
+        );
+      }
+
+      setForm(emptyForm);
+      setEditingId(null);
+      setShowForm(false);
+      await loadItems();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save opportunity.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteItem(id: string) {
+    if (!window.confirm("Permanently delete this opportunity?")) return;
+
+    try {
+      await api(`/api/opportunities?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      setMessage("Opportunity deleted.");
+      await loadItems();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to delete.");
+    }
+  }
+
+  const visibleItems = items.filter((item) => {
+    const matchesSearch =
+      `${item.title ?? ""} ${item.organization ?? ""}`
+        .toLowerCase()
+        .includes(search.toLowerCase());
+
+    const matchesFilter =
+      filter === "all" ||
+      (filter === "active" && item.status === "active") ||
+      (filter === "draft" && item.status === "draft");
+
+    return matchesSearch && matchesFilter;
+  });
+
+  if (checking) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-[#080d18] text-white">
+        Loading Super Admin Portal...
+      </main>
+    );
+  }
+
+  if (!user) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#080d18] px-5 text-white">
+        <form
+          onSubmit={handleLogin}
+          className="w-full max-w-md rounded-3xl border border-slate-800 bg-[#101827] p-8 shadow-2xl"
+        >
+          <p className="mb-3 text-xs font-bold uppercase tracking-[0.3em] text-cyan-400">
+            Gonn'a Global
+          </p>
+          <h1 className="text-3xl font-bold">Super Admin</h1>
+          <p className="mb-8 mt-2 text-sm text-slate-400">
+            Authorized platform administration
+          </p>
+
+          <label className="mb-2 block text-sm text-slate-300">Admin email</label>
+          <input
+            className={`${inputClass} mb-5`}
+            type="email"
+            required
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+
+          <label className="mb-2 block text-sm text-slate-300">Password</label>
+          <input
+            className={`${inputClass} mb-5`}
+            type="password"
+            required
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="Your Firebase Auth password"
+          />
+
+          {loginError && (
+            <p className="mb-4 text-sm text-red-400">{loginError}</p>
+          )}
+
+          <button className="w-full rounded-xl bg-cyan-400 px-4 py-3 font-bold text-slate-950 hover:bg-cyan-300">
+            Sign in securely
+          </button>
+
+          <p className="mt-6 text-center text-xs text-slate-500">
+            Access restricted to {ADMIN_EMAIL}
+          </p>
+        </form>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-[#080d18] text-white">
+      <header className="border-b border-slate-800 bg-[#0d1524]">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-5">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.25em] text-cyan-400">
+              Gonn'a Global
+            </p>
+            <h1 className="mt-1 text-xl font-bold">Super Admin Portal</h1>
+          </div>
+          <div className="flex items-center gap-4">
+            <span className="hidden text-sm text-slate-400 sm:block">
+              {user.email}
+            </span>
+            <button
+              onClick={() => signOut(auth)}
+              className="rounded-lg border border-slate-700 px-4 py-2 text-sm hover:bg-slate-800"
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <section className="mx-auto max-w-7xl px-5 py-8">
+        <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p className="text-sm text-slate-400">Platform management</p>
+            <h2 className="mt-1 text-3xl font-bold">Opportunities</h2>
+            <p className="mt-2 text-sm text-slate-400">
+              Manage listings in the existing Gonn'a Global database.
+            </p>
+          </div>
+          <button
+            onClick={() => {
+              setForm(emptyForm);
+              setEditingId(null);
+              setShowForm(!showForm);
+            }}
+            className="rounded-xl bg-cyan-400 px-5 py-3 text-sm font-bold text-slate-950 hover:bg-cyan-300"
+          >
+            + Create opportunity
+          </button>
+        </div>
+
+        {message && (
+          <div className="mb-6 rounded-xl border border-cyan-900 bg-cyan-950/40 px-4 py-3 text-sm text-cyan-200">
+            {message}
+          </div>
+        )}
+
+        {showForm && (
+          <form
+            onSubmit={saveItem}
+            className="mb-10 rounded-2xl border border-slate-800 bg-[#101827] p-6"
+          >
+            <h3 className="mb-6 text-xl font-semibold">
+              {editingId ? "Edit opportunity" : "Create opportunity"}
+            </h3>
+
+            <div className="grid gap-5 md:grid-cols-2">
+              {[
+                ["title", "Opportunity title"],
+                ["organization", "Organization"],
+                ["location", "Location / Country"],
+                ["deadline", "Deadline (YYYY-MM-DD)"],
+                ["posterUrl", "Poster image URL"],
+                ["applicationLink", "Application link"],
+                ["eligibility", "Eligibility"],
+                ["responsibilities", "Responsibilities"],
+                ["benefits", "Benefits"],
+              ].map(([key, label]) => (
+                <label key={key} className="block text-sm text-slate-300">
+                  {label}
+                  <input
+                    className={`${inputClass} mt-2`}
+                    value={form[key as keyof typeof form]}
+                    onChange={(event) =>
+                      setForm({ ...form, [key]: event.target.value })
+                    }
+                  />
+                </label>
+              ))}
+
+              {[
+                {
+                  key: "type",
+                  label: "Opportunity type",
+                  options: [
+                    "Global Opportunities", "Internships", "Hackathons",
+                    "Sports", "Conferences", "Freelancing", "Events",
+                    "Competitions",
+                  ],
+                },
+                {
+                  key: "mode",
+                  label: "Work mode",
+                  options: ["Remote", "Hybrid", "Onsite"],
+                },
+                {
+                  key: "funding",
+                  label: "Funding",
+                  options: ["Fully Funded", "Paid", "Free"],
+                },
+                {
+                  key: "careerDomain",
+                  label: "Career domain",
+                  options: [
+                    "AI & Technology", "Business & Startups",
+                    "Research & Science", "Leadership & Policy",
+                    "Media & Content", "Design & Creativity",
+                    "Social Impact", "Sports & Fitness",
+                    "Finance & Consulting", "Environment & Sustainability",
+                  ],
+                },
+                {
+                  key: "deadlineType",
+                  label: "Deadline category",
+                  options: ["Closing Soon", "This Week", "This Month", "Open"],
+                },
+                {
+                  key: "status",
+                  label: "Publishing status",
+                  options: ["active", "draft"],
+                },
+              ].map((field) => (
+                <label key={field.key} className="block text-sm text-slate-300">
+                  {field.label}
+                  <select
+                    className={`${inputClass} mt-2`}
+                    value={form[field.key as keyof typeof form]}
+                    onChange={(event) =>
+                      setForm({ ...form, [field.key]: event.target.value })
+                    }
+                  >
+                    {field.options.map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+
+              <label className="block text-sm text-slate-300 md:col-span-2">
+                Description
+                <textarea
+                  required
+                  rows={6}
+                  className={`${inputClass} mt-2`}
+                  value={form.description}
+                  onChange={(event) =>
+                    setForm({ ...form, description: event.target.value })
+                  }
+                  placeholder="Describe the opportunity..."
+                />
+              </label>
+            </div>
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button
+                disabled={saving}
+                className="rounded-xl bg-cyan-400 px-6 py-3 font-bold text-slate-950 disabled:opacity-50"
+              >
+                {saving
+                  ? "Saving..."
+                  : editingId
+                    ? "Save changes"
+                    : form.status === "draft"
+                      ? "Save draft"
+                      : "Publish opportunity"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowForm(false);
+                  setEditingId(null);
+                  setForm(emptyForm);
+                }}
+                className="rounded-xl border border-slate-700 px-6 py-3 text-sm"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+
+        <div className="mb-5 grid gap-4 sm:grid-cols-3">
+          {[
+            ["Total opportunities", items.length],
+            ["Published", items.filter((item) => item.status === "active").length],
+            ["Drafts", items.filter((item) => item.status === "draft").length],
+          ].map(([label, value]) => (
+            <div key={String(label)} className="rounded-2xl border border-slate-800 bg-[#101827] p-5">
+              <p className="text-sm text-slate-400">{label}</p>
+              <p className="mt-2 text-3xl font-bold">{value}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mb-5 flex flex-col gap-3 sm:flex-row">
+          <input
+            className={inputClass}
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search title or organization..."
+          />
+          <select
+            className={`${inputClass} sm:max-w-48`}
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+          >
+            <option value="all">All listings</option>
+            <option value="active">Published</option>
+            <option value="draft">Drafts</option>
+          </select>
+          <button
+            onClick={loadItems}
+            className="rounded-xl border border-slate-700 px-5 py-3 text-sm hover:bg-slate-800"
+          >
+            Refresh
+          </button>
+        </div>
+
+        <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#101827]">
+          {visibleItems.length === 0 ? (
+            <div className="p-12 text-center text-sm text-slate-400">
+              No opportunities found.
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-800">
+              {visibleItems.map((item) => (
+                <div
+                  key={item.id}
+                  className="flex flex-col justify-between gap-4 p-5 md:flex-row md:items-center"
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-semibold">{item.title || "Untitled"}</h3>
+                      <span className="rounded-full bg-slate-800 px-3 py-1 text-xs">
+                        {item.status || "unknown"}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm text-slate-400">
+                      {item.organization} · {item.type} · {item.mode}
+                    </p>
+                    <p className="mt-2 line-clamp-2 text-sm text-slate-500">
+                      {item.description}
+                    </p>
+                    {item.postedByType === "admin" && (
+                      <p className="mt-2 text-xs text-cyan-400">Posted by Admin</p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <button
+                      onClick={() => editItem(item)}
+                      className="rounded-lg border border-slate-700 px-4 py-2 text-sm hover:bg-slate-800"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => deleteItem(item.id)}
+                      className="rounded-lg border border-red-900 px-4 py-2 text-sm text-red-300 hover:bg-red-950"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+    </main>
+  );
+}
